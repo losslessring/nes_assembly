@@ -17,7 +17,9 @@ YPos:           .res 1       ; Player Y 16-bit position (8.8 fixed-point): hi+lo
 XVel:           .res 1       ; Player X (signed) velocity (in pixels per 256 frames)
 YVel:           .res 1       ; Player Y (signed) velocity (in pixels per 256 frames)
 
-GameCycles:      .res 1       ; Game cycles counter
+PrevSubmarine:  .res 1       ; Stores the value in seconds that the last submarine was added
+PrevAirplane:   .res 1       ; Stores the value in seconds that the last airplane was added
+
 Frame:          .res 1       ; Counts frames (0 to 255 and repeats)
 IsDrawComplete: .res 1       ; Flag to indicate when VBlank is done drawing
 Clock60:        .res 1       ; Counter that increments per second (60 frames)
@@ -37,6 +39,8 @@ ParamYPos:      .res 1       ; Used as parameter to subroutine
 ParamTileNum:   .res 1       ; Used as parameter to subroutine
 ParamNumTiles:  .res 1       ; Used as parameter to subroutine
 ParamAttribs:   .res 1       ; Used as parameter to subroutine
+
+PrevOAMCount:   .res 1       ; Store the previous number of bytes that were sent to the OAM
 
 ActorsArray:    .res MAX_ACTORS * .sizeof(Actor)
 
@@ -239,6 +243,51 @@ EndRoutine:
 .endproc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Subroutine to spawn actors when certain conditions are met
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+.proc SpawnActors
+
+SpawnAirplane:
+    lda Clock60                        ; Submarines are added in intervals of 3 seconds
+    sec
+    sbc PrevAirplane
+    cmp #2                             ; Only add a new submarine if the difference in time from the previous one is equal to 3
+    bne :+
+      lda #ActorType::AIRPLANE
+      sta ParamType                  ; Load parameter for the actor type
+      lda #223
+      sta ParamXPos                  ; Load parameter for actor position X
+      lda #100
+      sta ParamYPos
+
+      jsr AddNewActor                ; Call the subroutine to add the new missile actor
+    
+      lda Clock60
+      sta PrevAirplane              ; Save the current Clock60 time as the submarine last spawn time
+    :
+
+  SpawnSubmarine:
+    lda Clock60                        ; Submarines are added in intervals of 3 seconds
+    sec
+    sbc PrevSubmarine
+    cmp #3                             ; Only add a new submarine if the difference in time from the previous one is equal to 3
+    bne :+
+      lda #ActorType::SUBMARINE
+      sta ParamType                  ; Load parameter for the actor type
+      lda #223
+      sta ParamXPos                  ; Load parameter for actor position X
+      lda #185
+      sta ParamYPos
+
+      jsr AddNewActor                ; Call the subroutine to add the new missile actor
+    
+      lda Clock60
+      sta PrevSubmarine              ; Save the current Clock60 time as the submarine last spawn time
+    :
+    rts
+.endproc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Subroutine to loop all actors and update them (position, velocity, etc.)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 .proc UpdateActors
@@ -248,24 +297,38 @@ EndRoutine:
 
       cmp #ActorType::MISSILE
       bne :+
-        ;Compare currrent missile position with 40 position
-        ;If it matches, delete the missile by setting the type to NULL
-        lda ActorsArray+Actor::YPos,x
-        cmp #40
-        bpl IncreaseYPos
-        
-        lda #0
-        sta ActorsArray+Actor::YPos,x ; Reset the Y position
-        sta ActorsArray+Actor::XPos,x ; Reset the X position
-        lda #ActorType::NULL          ; Set the Actor type to NULL to delete it  
-        sta ActorsArray+Actor::Type,x 
-        jmp NextActor
-        
-      IncreaseYPos:  
         lda ActorsArray+Actor::YPos,x
         sec
-        sbc #1                         ; Decrement Y position of missiles by 1
+        sbc #1                          ; Decrement Y position of missiles by 1
         sta ActorsArray+Actor::YPos,x
+        bcs SkipMissile
+          lda #ActorType::NULL
+          sta ActorsArray+Actor::Type,x ; Remove the missile from the array
+        SkipMissile:
+        jmp NextActor
+      :
+      cmp #ActorType::AIRPLANE
+      bne :+
+        lda ActorsArray+Actor::XPos,x
+        sec
+        sbc #2                          ; Decrement Y position of airplane by 1
+        sta ActorsArray+Actor::XPos,x
+        bcs SkipAirplane
+          lda #ActorType::NULL
+          sta ActorsArray+Actor::Type,x ; Remove the airplane from the array
+        SkipAirplane:
+        jmp NextActor
+      :
+      cmp #ActorType::SUBMARINE
+      bne :+
+        lda ActorsArray+Actor::XPos,x
+        sec
+        sbc #1                          ; Decrement Y position of submarine by 1
+        sta ActorsArray+Actor::XPos,x
+        bcs SkipSubmarine
+          lda #ActorType::NULL
+          sta ActorsArray+Actor::Type,x ; Remove the submarine from the array
+        SkipSubmarine:
         jmp NextActor
       :
       NextActor:
@@ -322,6 +385,36 @@ EndRoutine:
         jsr DrawSprite                 ; Call routine to draw 4 PLAYER tiles to the OAM
         jmp NextActor
       :
+      cmp #ActorType::SUBMARINE
+      bne :+
+        lda ActorsArray+Actor::XPos,x
+        sta ParamXPos
+        lda ActorsArray+Actor::YPos,x
+        sta ParamYPos
+        lda #$04
+        sta ParamTileNum
+        lda #%00100000
+        sta ParamAttribs
+        lda #4
+        sta ParamNumTiles
+        jsr DrawSprite                 ; Call routine to draw 4 SUBMARINE tile to the OAM
+        jmp NextActor
+      :
+      cmp #ActorType::AIRPLANE
+      bne :+
+        lda ActorsArray+Actor::XPos,x
+        sta ParamXPos
+        lda ActorsArray+Actor::YPos,x
+        sta ParamYPos
+        lda #$10
+        sta ParamTileNum
+        lda #%00000000
+        sta ParamAttribs
+        lda #3
+        sta ParamNumTiles
+        jsr DrawSprite                 ; Call routine to draw 4 SUBMARINE tile to the OAM
+        jmp NextActor
+      :
       cmp #ActorType::MISSILE
       bne :+
         lda ActorsArray+Actor::XPos,x
@@ -337,28 +430,38 @@ EndRoutine:
         jsr DrawSprite                 ; Call routine to draw 1 MISSILE tile to the OAM
         jmp NextActor
       :
-      cmp #ActorType::NULL
-      bne :+
-        lda ActorsArray+Actor::XPos,x
-        sta ParamXPos
-        lda ActorsArray+Actor::YPos,x
-        sta ParamYPos
-        lda #$70
-        sta ParamTileNum
-        lda #%00100000                  ; Set the sprite behind the background to remove it
-        sta ParamAttribs
-        lda #1
-        sta ParamNumTiles
-        jsr DrawSprite
-        ;jmp NextActor
-      :
       NextActor:
         txa
         clc
         adc #.sizeof(Actor)
         tax
         cmp #MAX_ACTORS * .sizeof(Actor)
-        bne ActorsLoop
+        
+        beq :+
+          jmp ActorsLoop               ; Use absolute jump to avoid branch limit of [-128..127]
+        :
+      
+        tya
+        pha                            ; Save the Y register to the stack
+
+      LoopTrailingTiles:
+        cpy PrevOAMCount
+        bcs :+
+          lda #$FF
+          sta (SprPtr),y               ; Set Y position to $FF (to hide tile)
+          iny
+          sta (SprPtr),y               ; Set tile number as $FF
+          iny
+          sta (SprPtr),y               ; Set attribs as $FF
+          iny
+          sta (SprPtr),y               ; Set X position to $FF (to hide tile)
+          iny
+          jmp LoopTrailingTiles
+        :
+
+        pla                            ; Save the previous value of Y into PrevOAMCount
+        sta PrevOAMCount               ; This is the total number of bytes that we just sent to the OAM
+
     rts
 .endproc
 
@@ -411,7 +514,6 @@ Reset:
 
 InitVariables:
     lda #0
-    sta GameCycles           ; GameCycles = 0
     sta Frame                ; Frame = 0
     sta Clock60              ; Clock60 = 0
     sta XScroll              ; XScroll = 0
@@ -512,7 +614,6 @@ EnableRendering:
     sta PPU_MASK             ; Set PPU_MASK bits to render the background
 
 GameLoop:
-    inc GameCycles           ; Increment game cycles
     lda Buttons
     sta PrevButtons          ; Stores the previously pressed buttons
 
@@ -535,12 +636,9 @@ GameLoop:
         jsr AddNewActor      ; Call the subroutine to add a new missile actor
     :
 
-    ;; TODO:
-    ;; -----------------
-    ;; jsr SpawnActors
+    jsr SpawnActors
     jsr UpdateActors
     jsr RenderActors
-    ;; -----------------
 
     WaitForVBlank:           ; We lock the execution of the game logic here
       lda IsDrawComplete     ; Here we check and only perform a game loop call once NMI is done drawing
@@ -674,7 +772,7 @@ BackgroundData:
 .byte $13,$13,$6c,$13,$20,$21,$21,$21,$21,$21,$21,$21,$45,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$59,$56,$00,$00
 .byte $13,$13,$78,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$15,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$58,$56,$00,$00
 .byte $13,$13,$7b,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$15,$15,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$53,$56,$00,$00
-.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$15,$21,$21,$25,$35,$15,$15,$12,$00,$60,$00,$00,$54,$56,$00,$00
+.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$15,$21,$21,$25,$35,$15,$15,$12,$00,$00,$00,$00,$54,$56,$00,$00
 .byte $13,$13,$84,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$21,$21,$26,$36,$15,$15,$12,$00,$00,$00,$00,$58,$56,$00,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$27,$37,$15,$15,$12,$00,$00,$00,$00,$58,$56,$00,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$48,$21,$21,$15,$27,$37,$15,$15,$12,$00,$00,$00,$00,$5d,$56,$00,$00
@@ -707,7 +805,7 @@ BackgroundData:
 .byte $13,$13,$6c,$13,$20,$21,$21,$21,$21,$21,$21,$21,$45,$21,$21,$21,$21,$21,$21,$27,$37,$15,$15,$12,$00,$00,$00,$00,$59,$56,$aa,$00
 .byte $13,$13,$78,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$15,$21,$21,$21,$28,$38,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$7b,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$15,$15,$21,$21,$29,$39,$15,$15,$12,$00,$00,$00,$00,$53,$56,$aa,$00
-.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$15,$21,$1f,$2a,$3a,$3c,$15,$12,$00,$61,$00,$00,$54,$56,$aa,$00
+.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$15,$21,$1f,$2a,$3a,$3c,$15,$12,$00,$00,$00,$00,$54,$56,$aa,$00
 .byte $13,$13,$84,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$21,$21,$28,$3b,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$14,$11,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$48,$21,$21,$15,$14,$11,$15,$15,$12,$00,$00,$00,$00,$5d,$56,$aa,$00
@@ -740,7 +838,7 @@ BackgroundData:
 .byte $13,$13,$6c,$13,$20,$21,$21,$21,$21,$21,$21,$21,$45,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$78,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$7b,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$59,$56,$aa,$00
-.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$62,$00,$00,$58,$56,$aa,$00
+.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$15,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$84,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$29,$39,$15,$15,$12,$00,$00,$00,$00,$59,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$1f,$2a,$3a,$3d,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$48,$21,$15,$2d,$2a,$3a,$3c,$15,$12,$00,$00,$00,$00,$5b,$56,$aa,$00
@@ -773,7 +871,7 @@ BackgroundData:
 .byte $13,$13,$6c,$13,$20,$21,$21,$21,$21,$21,$48,$21,$15,$21,$21,$21,$21,$1d,$1e,$2a,$3a,$3c,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$78,$13,$20,$21,$21,$21,$21,$21,$49,$21,$21,$21,$21,$21,$21,$21,$21,$2b,$3b,$3e,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$7b,$13,$20,$21,$21,$21,$21,$21,$4a,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$4e,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
-.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$15,$48,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$4e,$15,$12,$00,$63,$00,$00,$58,$56,$aa,$00
+.byte $13,$13,$6e,$13,$20,$21,$21,$21,$21,$15,$48,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$4e,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$84,$13,$20,$21,$21,$21,$21,$21,$49,$21,$21,$21,$21,$21,$21,$21,$21,$14,$11,$3f,$15,$12,$00,$00,$00,$00,$58,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$4a,$21,$21,$21,$21,$21,$21,$15,$15,$14,$11,$15,$15,$12,$00,$00,$00,$00,$59,$56,$aa,$00
 .byte $13,$13,$60,$13,$20,$21,$21,$21,$21,$21,$21,$21,$21,$21,$21,$15,$21,$15,$15,$14,$11,$15,$15,$12,$00,$00,$00,$00,$59,$56,$aa,$00
