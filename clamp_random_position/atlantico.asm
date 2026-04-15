@@ -301,33 +301,32 @@ EndRoutine:
       sta ParamXPos                    ; Load parameter for actor position X
       
       jsr GetRandomNumber
-      
-      
-      cmp #40
-      bmi OnLess
-      
-      cmp #140
-      bpl OnGreater
 
-      sta ParamYPos
-      jmp AddActor
+      cmp #0                           ; Check the generated value
+      
+      bpl MenuCoordsCheck              ; If the generated value is greater than 0, go to check if 
+                                       ; it is not inside the menu
+      eor #%10000000                   ; If the value is less than zero, flip the zero flag to make it positive
+      
+  MenuCoordsCheck:    
+      cmp #40                          ; Check if the generated value is inside the menu
+      bmi OnLess                       ; If the value is inside the menu, add to it to make it appear lower
+      
+      cmp #140                         ; Check if the generated value is beneath the water
+      bpl OnGreater                    ; If the value is below the water
+
+      sta ParamYPos                    ; Store the value in a function parameter 
+      jmp AddActor                     ; Add actor
   OnLess:
       
-      ;lda #40
-      cmp #0
-      bpl GreaterThan0
-      eor #%10000000
-      sta ParamYPos
-      jmp AddActor
-  GreaterThan0:
       clc
-      adc #40
-      sta ParamYPos
-      jmp AddActor
+      adc #40                          ; Add value to push below the menu
+      sta ParamYPos                    ; Store the value in a function parameter 
+      jmp AddActor                     ; Add actor 
       
   OnGreater:
       
-      lda #140
+      lda #140                         ; Clump value to be above the surface
       sta ParamYPos                    ; Load parameter for actor position Y
   AddActor:
       jsr AddNewActor                  ; Call the subroutine to add the new airplane actor
