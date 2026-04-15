@@ -40,6 +40,9 @@ ParamTileNum:   .res 1       ; Used as parameter to subroutine
 ParamNumTiles:  .res 1       ; Used as parameter to subroutine
 ParamAttribs:   .res 1       ; Used as parameter to subroutine
 
+ParamUpBoundry:    .res 1       ; Upper boundry parameter
+ParamLowBoundry:   .res 1       ; Lower boundry parameter
+
 PrevOAMCount:   .res 1       ; Store the previous number of bytes that were sent to the OAM
 
 Seed:           .res 2       ; Initialize 16-bit seed to any value except 0
@@ -268,6 +271,40 @@ EndRoutine:
 .endproc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Set the values to be in specified range
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.proc SetInRange
+
+
+      cmp #0                           ; Check the generated value
+      
+      bpl MenuCoordsCheck              ; If the generated value is greater than 0, go to check if 
+                                       ; it is not inside the menu
+      eor #%10000000                   ; If the value is less than zero, flip the zero flag to make it positive
+      
+  MenuCoordsCheck:    
+                                       ; Check if the generated value is inside the menu
+      
+      cmp ParamUpBoundry               ; Check if the generated value is inside the menu
+      bmi OnLess                       ; If the value is inside the menu, add to it to make it appear lower
+      
+      cmp ParamLowBoundry                        ; Check if the generated value is beneath the water
+      bpl OnGreater                    ; If the value is below the water
+      rts
+  
+  OnLess:
+      clc
+      adc ParamUpBoundry                          ; Add value to push below the menu
+      rts
+  
+  OnGreater:
+      lda ParamLowBoundry                         ; Clump value to be above the surface
+      rts
+
+.endproc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Subroutine to spawn actors when certain conditions are met
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 .proc SpawnActors
@@ -300,33 +337,15 @@ EndRoutine:
       lda #235
       sta ParamXPos                    ; Load parameter for actor position X
       
+      lda #40
+      sta ParamUpBoundry
+      
+      lda #140
+      sta ParamLowBoundry
+      
       jsr GetRandomNumber
-
-      cmp #0                           ; Check the generated value
       
-      bpl MenuCoordsCheck              ; If the generated value is greater than 0, go to check if 
-                                       ; it is not inside the menu
-      eor #%10000000                   ; If the value is less than zero, flip the zero flag to make it positive
-      
-  MenuCoordsCheck:    
-      cmp #40                          ; Check if the generated value is inside the menu
-      bmi OnLess                       ; If the value is inside the menu, add to it to make it appear lower
-      
-      cmp #140                         ; Check if the generated value is beneath the water
-      bpl OnGreater                    ; If the value is below the water
-
-      sta ParamYPos                    ; Store the value in a function parameter 
-      jmp AddActor                     ; Add actor
-  OnLess:
-      
-      clc
-      adc #40                          ; Add value to push below the menu
-      sta ParamYPos                    ; Store the value in a function parameter 
-      jmp AddActor                     ; Add actor 
-      
-  OnGreater:
-      
-      lda #140                         ; Clump value to be above the surface
+      jsr SetInRange
       sta ParamYPos                    ; Load parameter for actor position Y
   AddActor:
       jsr AddNewActor                  ; Call the subroutine to add the new airplane actor

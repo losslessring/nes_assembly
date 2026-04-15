@@ -30,3 +30,6 @@ BUTTON_RIGHT  = $01          ; 00000001
 ;; Maximum number of actors that we can have
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MAX_ACTORS = 10
+
+MENU_HEIGHT = 40
+SKY_HEIGHT = 140
