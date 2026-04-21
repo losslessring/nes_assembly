@@ -8,6 +8,8 @@
 ;; Variables declared in RAM zero-page
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 .segment "ZEROPAGE"
+Collision:      .res 1       ; Flag if a collision happened or not
+
 Buttons:        .res 1       ; Pressed buttons (A|B|Sel|Start|Up|Dwn|Lft|Rgt)
 PrevButtons:    .res 1       ; Stores the previous buttons from the last frame
 
@@ -39,9 +41,10 @@ ParamYPos:      .res 1       ; Used as parameter to subroutine
 ParamTileNum:   .res 1       ; Used as parameter to subroutine
 ParamNumTiles:  .res 1       ; Used as parameter to subroutine
 ParamAttribs:   .res 1       ; Used as parameter to subroutine
-
-ParamUpBoundry:    .res 1       ; Upper boundry parameter
-ParamLowBoundry:   .res 1       ; Lower boundry parameter
+ParamRectX1:    .res 1       ; Used as parameter to subroutine
+ParamRectY1:    .res 1       ; Used as parameter to subroutine
+ParamRectX2:    .res 1       ; Used as parameter to subroutine
+ParamRectY2:    .res 1       ; Used as parameter to subroutine
 
 PrevOAMCount:   .res 1       ; Store the previous number of bytes that were sent to the OAM
 
@@ -271,41 +274,6 @@ EndRoutine:
 .endproc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Set the values to be in specified range
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-.proc SetInRange
-
-
-      cmp #0                           ; Check the generated value
-      
-      bpl MenuCoordsCheck              ; If the generated value is greater than 0, go to check if 
-                                       ; it is not inside the menu
-      eor #%10000000                   ; If the value is less than zero, flip the zero flag to make it positive
-      
-  MenuCoordsCheck:    
-      
-      cmp ParamUpBoundry               ; Check if the generated value is inside the menu
-      
-
-      bmi OnLess                       ; If the value is inside the menu, add to it to make it appear lower
-      
-      cmp ParamLowBoundry                        ; Check if the generated value is beneath the water
-      bpl OnGreater                    ; If the value is below the water
-      rts
-  
-  OnLess:
-      clc
-      adc ParamUpBoundry                          ; Add value to push below the menu
-      rts
-  
-  OnGreater:
-      lda ParamLowBoundry                         ; Clump value to be above the surface
-      rts
-
-.endproc
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Subroutine to spawn actors when certain conditions are met
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 .proc SpawnActors
@@ -319,7 +287,15 @@ EndRoutine:
       sta ParamType                    ; Load parameter for the actor type
       lda #223
       sta ParamXPos                    ; Load parameter for actor position X
-      lda #185
+      
+      jsr GetRandomNumber              ; Fetch a new random number for the Y position of the submarine
+      lsr
+      lsr
+      lsr                              ; Divide the random number by 8 to get a healthy Y position range
+      clc
+      adc #180                         ; And then add 180 to to it to move the submarine to the bottom part of the screen
+      sta ParamYPos
+
       sta ParamYPos                    ; Load parameter for actor position Y
 
       jsr AddNewActor                  ; Call the subroutine to add the new submarine actor
@@ -338,17 +314,14 @@ EndRoutine:
       lda #235
       sta ParamXPos                    ; Load parameter for actor position X
       
-      lda #40
-      sta ParamUpBoundry
-      
-      lda #140
-      sta ParamLowBoundry
-      
       jsr GetRandomNumber
-      
-      jsr SetInRange
+      lsr
+      lsr                              ; Divide the random number (0-255) by 4 to adjust for the correct Y position range
+      clc
+      adc #35                          ; And then add 35 to to it to place the airplane in the correct place in the sky
+
       sta ParamYPos                    ; Load parameter for actor position Y
-  AddActor:
+
       jsr AddNewActor                  ; Call the subroutine to add the new airplane actor
     
       lda Clock60
@@ -356,6 +329,102 @@ EndRoutine:
     :
     rts
 .endproc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Subroutine to loop all enemy actors checking for collision with missile
+;; Params = ParamXPos, ParamYPos (are the X and Y position of the missile)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+.proc CheckEnemyCollision
+    txa
+    pha                                ; Push and save X register in the stack
+
+    ldx #0
+    stx Collision                      ; Collision = 0
+
+  EnemiesCollisionLoop:
+    cpx #MAX_ACTORS * .sizeof(Actor)   ; We loop all entities, looking for enemies (airplanes)
+    beq FinishCollisionCheck
+      lda ActorsArray+Actor::Type,x    ; Load the type of the actor we are looping
+      cmp #ActorType::AIRPLANE
+      bne NextEnemy                    ; If it's NOT Airplane, bypass this enemy and move check the next one
+
+      ;; LOAD BOUNDING BOX X1, Y1, X2, and Y2
+      lda ActorsArray+Actor::XPos,x    ; Bounding Box X1
+      sta ParamRectX1
+      lda ActorsArray+Actor::YPos,x    ; Bouding Box Y1
+      sta ParamRectY1
+
+      lda ActorsArray+Actor::XPos,x
+      clc
+      adc #22                          ; Get right value of the airplane bounding box by adding 22 pixels to the right
+      sta ParamRectX2                  ; Bounding Box X2
+
+      lda ActorsArray+Actor::YPos,x
+      clc
+      adc #8                           ; Get the bottom of the airplane bounding box by adding 8
+      sta ParamRectY2                  ; Bouding Box Y2
+    ; Loop:
+      ;jmp Loop
+      ;---------------------------------
+      jsr IsPointInsideBoundingBox     ; Proceed to test if point is inside bounding box
+      ;---------------------------------
+      sta Collision
+      ;lda Collision
+      beq NextEnemy                    ; If no collision, don't do anything
+        lda #ActorType::NULL           ; Else, destroy airplane
+        sta ActorsArray+Actor::Type,x  ; If collision happened, destroy airplane entity
+        jmp FinishCollisionCheck       ; Also, if collision happened we stop looping other enemies and leave the subroutine
+      
+  NextEnemy:
+      txa
+      clc
+      adc #.sizeof(Actor)              ; X += sizeof(Actor)
+      tax
+      jmp EnemiesCollisionLoop         ; Loop to check the next actor to see if it's an enemy (airplane)
+
+FinishCollisionCheck:
+    pla
+    tax                                ; Pull and restore the old value of X
+    lda #1
+    rts
+.endproc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Subroutine to check if a point is inside a bounding box.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Params:
+;;   (ParamXPos,ParamYPos) are the coords of the point to be tested
+;;   (ParamRectX1,ParamRectY1,ParamRectX2,ParamRectY2) are rectangle coords
+;; Output:
+;;   Collision flag is either 1 or 0
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+.proc IsPointInsideBoundingBox
+
+    lda ParamXPos
+    
+    cmp ParamRectX1
+    bmi NotInBox
+    
+    cmp ParamRectX2
+    bpl NotInBox
+
+
+    lda ParamYPos
+
+    cmp ParamRectY1
+    bmi NotInBox
+    
+    cmp ParamRectY2
+    bpl NotInBox
+
+    lda #1
+    rts
+
+  NotInBox:
+    lda #0
+    rts
+.endproc
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Subroutine to loop all actors and update them (position, velocity, etc.)
@@ -375,6 +444,28 @@ EndRoutine:
           lda #ActorType::NULL
           sta ActorsArray+Actor::Type,x ; Remove the missile from the array
         SkipMissile:
+
+      CheckCollision:
+        lda ActorsArray+Actor::XPos,x
+        clc
+        adc #3
+        sta ParamXPos                   ; Missile position to be checked X += 3 (plus 3 pixels from the left)
+
+        lda ActorsArray+Actor::YPos,x
+        clc
+        adc #1
+        sta ParamYPos                   ; Missile position to be checked Y += 1 (plus 1 pixels from the top)
+
+        jsr CheckEnemyCollision         ; Perform collision check between the missile and other enemy actor
+
+        ;; TODO: If Collision == 1, we destroy the missile
+        lda #1
+        cmp Collision
+        bne NextActor
+
+          lda #ActorType::NULL
+          sta ActorsArray+Actor::Type,x ; Remove the missile from the array
+
         jmp NextActor
       :
       cmp #ActorType::SUBMARINE
